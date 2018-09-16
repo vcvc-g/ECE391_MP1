@@ -39,6 +39,8 @@ dead_base_pic: 	    .string "xxxxx"	# Picture of a dead base
 crosshairs_x:		.long 0x0	# X-position of the crosshairs
 crosshairs_y:		.long 0x0	# Y-position of the crosshairs
 
+pre_cursor:         .long 0x0
+
 .text
 
 # void mp1_poke(void);
@@ -71,9 +73,76 @@ mp1_poke:
 
 .globl mp1_rtc_tasklet
 mp1_rtc_tasklet:
+        #callee-saved reg
+        pushl %ebp
+        movl %esp, %ebp
+        pushl %ebx
+        pushl %esi
+        pushl %edi
+
+        #edx init with HEAD
+        movl mp1_missile_list, %edx
+        #pre_cursor init with HEAD
+        movl %edx, pre_cursor
 
 
-		ret
+
+    list_loop:
+        #edx node cursor
+        #check if cursor null
+        cmpl $0, %edx
+        je link_done
+
+        #call update_missiles according edx
+        pushl %edx
+        call update_missiles
+        popl %edx
+
+        #check if *next null
+        cmpl $0, (%edx)
+        je link_done
+
+        #save cursor as pre_cursor
+        movl %edx, pre_cursor
+        #assign *next to cursor
+        movl (%edx), %edx
+        jmp list_loop
+
+
+link_done:
+
+
+
+redraw_base:
+
+
+
+redraw_xhair:
+#rowoffsets row*80*2bytes
+        imul $80, crosshairs_y, %eax
+        shll $1, %eax
+        #coloffsets col*2bytes
+        movl crosshairs_x, %edi
+        shll $1, %edi
+        #vmem offset
+        addl %edi, %eax
+        #ascii into %cl
+        movb $0x2B, %cl
+        #call poke draw
+        pushl %edx
+        call mp1_poke
+        popl %edx
+
+
+
+
+
+        #callee-restore reg:
+        popl %edi
+        popl %esi
+        popl %ebx
+        leave
+        ret
 
 # int mp1_ioctl(unsigned long arg, unsigned int cmd)
 # The dispatch function for the MP1 ioctls - should use the cmd argument
@@ -101,14 +170,197 @@ jumptable:
         .long mp1_ioctl_startgame, mp1_ioctl_addmissile, mp1_ioctl_movexhairs, mp1_ioctl_getstatus, mp1_ioctl_endgame
 
 # ----------------- Functions private to this file -------------------
-tasklet_next_list:
-        ret
-
-mp1_missile_remove:
-        ret
-
 update_missiles:
+        #callee-saved reg
+        pushl %ebp
+        movl %esp, %ebp
+        pushl %ebx
+        pushl %esi
+        pushl %edi
+
+        #load x,y into esi edi
+        movl 4(%edx), %esi
+		sarl $16, %esi
+        movl 8(%edx), %edi
+		sarl $16, %edi
+
+        #check move off screen
+        cmpl $0, %esi
+        jl mp1_missile_remove
+        cmpl $79, %esi
+        jg mp1_missile_remove
+        cmpl $0, %edi
+        jl mp1_missile_remove
+        cmpl $24, %edi
+        jg mp1_missile_remove
+
+        #check reach dest/exploding
+        #check curr exp
+        cmpl $0, 28(%edx)
+        jne explode_dest
+        #check reach dest
+        cmpl 20(%edx), %esi
+        jne simply_moving
+        cmpl 24(%edx), %edi
+        jne simply_moving
+
+    explode_dest:
+
+        #caller-saved  missile_explode
+        pushl %edx
+        pushl %ecx
+        #para *m push
+        pushl %edx
+        call missile_explode
+        addl $4, %esp
+        #caller-restore
+        popl %ecx
+        popl %edx
+
+        #check eax of missile_explode
+        cmpl $0, %eax
+        #check 0, skip notify_user
+        je dec_explode
+
+        #call notify_user
+        pushl %eax
+        pushl %edx
+        pushl %ecx
+        call mp1_notify_user
+        popl %ecx
+        popl %edx
+        popl %eax
+
+
+    dec_explode:
+        #decrement explode
+        subl $1, 28(%edx)
+
+        #erase old
+        #rowoffsets row*80*2bytes
+        imul $80, %edi, %eax
+        shll $1, %eax
+        #coloffsets col*2bytes
+        movl %esi, %ebx
+        shll $1, %ebx
+        addl %ebx, %eax
+        #ascii into %cl
+        movb $0x20, %cl
+        #call poke erase old
+        pushl %edx
+        call mp1_poke
+        popl %edx
+        #check explode==0
+        cmpl $0, 28(%edx)
+        je mp1_missile_remove
+
+        #draw explod char
+        #rowoffsets row*80*2bytes
+        imul $80, %edi, %eax
+        shll $1, %eax
+        #coloffsets col*2bytes
+        movl %esi, %ebx
+        shll $1, %ebx
+        addl %ebx, %eax
+        #ascii into %cl
+        movb $0x40, %cl
+        #call poke erase old
+        pushl %edx
+        call mp1_poke
+        popl %edx
+
+        jmp update_done
+
+
+    simply_moving:
+
+####################################################
+    erase_old:
+		#rowoffsets row*80*2bytes
+        imul $80, %edi, %eax
+        shll $1, %eax
+        #coloffsets col*2bytes
+        movl %esi, %ebx
+        shll $1, %ebx
+        #ecx old xhair vmem offset
+        addl %ebx, %eax
+		#ascii into %cl
+        movb $0x20, %cl
+        #call poke draw space on old xhair
+        pushl %edx
+        call mp1_poke
+        popl %edx
+
+    draw_new:
+		#update x,y
+		movl 12(%edx), %esi
+		addl 4(%edx), %esi
+        movl %esi, 4(%edx)
+		movl 16(%edx), %edi
+		addl 8(%edx), %edi		
+		movl %edi, 8(%edx)
+		sarl $16, %esi
+		sarl $16, %edi
+		
+        #draw new missile
+        imul $80, %edi, %eax
+        shll $1, %eax
+        #coloffsets col*2bytes
+        movl %esi, %ebx
+        shll $1, %ebx
+        addl %ebx, %eax
+        #ascii into %cl
+        movb 32(%edx), %cl
+        #call poke draw new
+        pushl %edx
+        call mp1_poke
+        popl %edx
+
+
+#########################################################
+    update_done:
+        #callee-restore reg:
+        popl %edi
+        popl %esi
+        popl %ebx
+        leave
 		ret
+
+
+    mp1_missile_remove:
+    #remove from list, free node///this_cur=%edx, pre_cursor=%eax, nxt_cur=(%edx)=%ecx
+        movl (%edx), %ecx
+        movl pre_cursor, %eax
+        #check edx is head, head=*next, free
+        cmpl mp1_missile_list, %edx
+        jne middle
+        movl %ecx, mp1_missile_list
+        jmp free_edx
+
+    middle:
+        #check if last
+        cmpl $0, %ecx
+        je last
+        #check edx in middle, (%eax)<-%ecx=(%edx)
+        movl %ecx,(%eax)
+        jmp free_edx
+
+    last:
+        #check edx is last
+        movl $0, (%eax)
+
+free_edx:
+
+        pushl %eax
+        pushl %edx
+        pushl %ecx
+        call mp1_free
+        popl %ecx
+        popl %edx
+        popl %eax
+        jmp update_done
+
+
 
 mp1_ioctl_startgame:
         #callee-saved reg
@@ -154,14 +406,14 @@ mp1_ioctl_addmissile:
 
         #check return ptr eax if malloc succeed
         cmpl $0, %eax
-        ##failed return -1
+        #failed return -1
         je ret_neg1
 
         #call copy_from_user to malloced space
         pushl %eax
         pushl %edx
         pushl %ecx
-        ##push args
+        #push args
         pushl $36
         pushl %ebx
         pushl %eax
@@ -169,11 +421,11 @@ mp1_ioctl_addmissile:
         addl $12, %esp
         popl %ecx
         popl %edx
-        ##check returned eax if copy succeed
+        #check returned eax if copy succeed
         cmpl $0, %eax
-        ###failed free and return -1
-        je ret_neg1_free
-        ##if succeed restore malloc returned ptr to eax
+        #failed free and return -1
+        jne ret_neg1_free
+        #check succeed restore malloc returned ptr to eax
         popl %eax
 
         #Update *next in missle
@@ -366,7 +618,7 @@ mp1_ioctl_getstatus:
         #call mp1_copy_to_user
         pushl %edx
         pushl %ecx
-        ##push args n, *from, *to
+        #push args n, *from, *to
         pushl $4
         pushl %eax
         pushl %ebx
