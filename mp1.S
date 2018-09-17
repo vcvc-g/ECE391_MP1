@@ -1,4 +1,3 @@
-
 # mp1.S - missile-command version
 # Good luck, and have fun!
 
@@ -82,8 +81,9 @@ mp1_rtc_tasklet:
 
         #edx init with HEAD
         movl mp1_missile_list, %edx
-        #pre_cursor init with HEAD
-        movl %edx, pre_cursor
+        #pre_cursor init with 0
+        #movl $0, pre_cursor
+		movl $0, %ecx
 
 
 
@@ -94,28 +94,72 @@ mp1_rtc_tasklet:
         je link_done
 
         #call update_missiles according edx
-        pushl %edx
-        call update_missiles
-        popl %edx
 
-        #check if *next null
-        cmpl $0, (%edx)
-        je link_done
+
+		pushl %ecx
+		pushl %edx
+        call update_missiles
+		addl $8, %esp
+		
+		
+
+
 
         #save cursor as pre_cursor
-        movl %edx, pre_cursor
+        #movl %edx, pre_cursor
+		movl %edx, %ecx
         #assign *next to cursor
-        movl (%edx), %edx
+        movl NEXT(%edx), %edx
         jmp list_loop
 
 
 link_done:
 
 
+#################################################################
+#start draw cities
+						#ebx as the city pic address carrier
+		movl $2,%esi	#set esi as city counter
+		movl $4,%edi	#set edi as the char counter
+		movl base_alive, %edx 	#put base status into edx
+		sall $8,%edx
+		##imull $160,$24,%eax		#initialize eax
+		##addl $36,%eax
+		movl $3956,%eax
+		############outer loop start
+outer_loop:	
+		cmpl $0,%esi
+		jl city_loop_done
+		cmpl $0,%edx
+		jge city_dead
+		movl $base_pic,%ebx
+		jmp city_alive
+city_dead:
+		movl $dead_base_pic,%ebx
+		############inner loop start
+city_alive:
+		movl $4,%edi
+inner_loop:
 
-redraw_base:
-
-
+		cmpl $0,%edi
+		jl char_loop_done
+		movl (%ebx),%ecx
+		pushl %edx
+		call mp1_poke
+		popl %edx		
+		addl $2,%eax	####move right in the screen
+		addl $1,%ebx	####next char
+		addl $-1,%edi	####decrement the inner counter
+		jmp inner_loop
+		############inner loop stop
+char_loop_done:
+		addl $-48,%eax
+		sall $8,%edx
+		addl $-1,%esi
+		jmp outer_loop
+		############outer loop stop
+city_loop_done:
+#######################################################################
 
 redraw_xhair:
 #rowoffsets row*80*2bytes
@@ -156,7 +200,7 @@ redraw_xhair:
 .globl mp1_ioctl
 mp1_ioctl:
         #return -1 if non of above
-        cmpl $4, 8(%esp)
+        cmpl $4, Y(%esp)
         ja cmd_neg1
         #jump according cmp value
         movl 8(%esp), %eax
@@ -174,34 +218,37 @@ update_missiles:
         #callee-saved reg
         pushl %ebp
         movl %esp, %ebp
+		
+		movl 8(%ebp), %edx
+		
         pushl %ebx
         pushl %esi
         pushl %edi
 
         #load x,y into esi edi
-        movl 4(%edx), %esi
+        movl X(%edx), %esi
 		sarl $16, %esi
-        movl 8(%edx), %edi
+        movl Y(%edx), %edi
 		sarl $16, %edi
 
         #check move off screen
         cmpl $0, %esi
-        jl mp1_missile_remove
+        jl dec_explode
         cmpl $79, %esi
-        jg mp1_missile_remove
+        jg dec_explode
         cmpl $0, %edi
-        jl mp1_missile_remove
+        jl dec_explode
         cmpl $24, %edi
-        jg mp1_missile_remove
+        jg dec_explode
 
         #check reach dest/exploding
         #check curr exp
-        cmpl $0, 28(%edx)
+        cmpl $0, EXPLODED(%edx)
         jne explode_dest
         #check reach dest
-        cmpl 20(%edx), %esi
+        cmpl DEST_X(%edx), %esi
         jne simply_moving
-        cmpl 24(%edx), %edi
+        cmpl DEST_Y(%edx), %edi
         jne simply_moving
 
     explode_dest:
@@ -234,7 +281,7 @@ update_missiles:
 
     dec_explode:
         #decrement explode
-        subl $1, 28(%edx)
+        subl $1, EXPLODED(%edx)
 
         #erase old
         #rowoffsets row*80*2bytes
@@ -250,9 +297,10 @@ update_missiles:
         pushl %edx
         call mp1_poke
         popl %edx
+		
         #check explode==0
-        cmpl $0, 28(%edx)
-        je mp1_missile_remove
+        cmpl $0, EXPLODED(%edx)
+        jle mp1_missile_remove
 
         #draw explod char
         #rowoffsets row*80*2bytes
@@ -282,7 +330,7 @@ update_missiles:
         #coloffsets col*2bytes
         movl %esi, %ebx
         shll $1, %ebx
-        #ecx old xhair vmem offset
+        #old xhair vmem offset
         addl %ebx, %eax
 		#ascii into %cl
         movb $0x20, %cl
@@ -293,12 +341,12 @@ update_missiles:
 
     draw_new:
 		#update x,y
-		movl 12(%edx), %esi
-		addl 4(%edx), %esi
-        movl %esi, 4(%edx)
-		movl 16(%edx), %edi
-		addl 8(%edx), %edi		
-		movl %edi, 8(%edx)
+		movl VX(%edx), %esi
+		addl X(%edx), %esi
+        movl %esi, X(%edx)
+		movl VY(%edx), %edi
+		addl Y(%edx), %edi		
+		movl %edi, Y(%edx)
 		sarl $16, %esi
 		sarl $16, %edi
 		
@@ -310,7 +358,7 @@ update_missiles:
         shll $1, %ebx
         addl %ebx, %eax
         #ascii into %cl
-        movb 32(%edx), %cl
+        movb C(%edx), %cl
         #call poke draw new
         pushl %edx
         call mp1_poke
@@ -328,36 +376,53 @@ update_missiles:
 
 
     mp1_missile_remove:
-    #remove from list, free node///this_cur=%edx, pre_cursor=%eax, nxt_cur=(%edx)=%ecx
-        movl (%edx), %ecx
-        movl pre_cursor, %eax
+    #remove from list, free node/// pre_cursor=%ecx, this_cur=%edx, nxt_cur=(%edx)=%eax
+		movl 12(%ebp), %ecx
+		movl 8(%ebp), %edx	
+		movl NEXT(%edx), %eax
+		
+		########################################
+		
+		
+		
+		########################################
+
         #check edx is head, head=*next, free
         cmpl mp1_missile_list, %edx
         jne middle
-        movl %ecx, mp1_missile_list
+	#head free
+        movl %eax, mp1_missile_list
+		
         jmp free_edx
 
     middle:
         #check if last
-        cmpl $0, %ecx
+        cmpl $0, %eax
         je last
         #check edx in middle, (%eax)<-%ecx=(%edx)
-        movl %ecx,(%eax)
+        movl %eax,NEXT(%ecx)
         jmp free_edx
 
     last:
         #check edx is last
-        movl $0, (%eax)
+        movl $0, NEXT(%ecx)
 
 free_edx:
 
         pushl %eax
         pushl %edx
         pushl %ecx
+		
+		pushl %edx
         call mp1_free
+		addl $4, %esp
+		
         popl %ecx
         popl %edx
         popl %eax
+		
+		movl %ecx, %edx
+		
         jmp update_done
 
 
@@ -371,7 +436,7 @@ mp1_ioctl_startgame:
         pushl %edi
         #initialize vars
         movl $0, mp1_missile_list
-        movl $0xFFFFFF00, base_alive
+        movl $0x00FFFFFF, base_alive
         movl $0, mp1_score
         #set crosshairs middle
         movl $40, crosshairs_x
@@ -430,7 +495,7 @@ mp1_ioctl_addmissile:
 
         #Update *next in missle
 		movl mp1_missile_list, %edx
-        movl %edx, (%eax)
+        movl %edx, NEXT(%eax)
         #Update HEAD ptr
         movl %eax, mp1_missile_list
         #success return 0
@@ -452,6 +517,7 @@ ret_neg1:
         ret
 
 ret_neg1_free:
+		popl %eax
         #call mp1_free, eax as *ptr
         pushl %eax
         call mp1_free
@@ -576,6 +642,7 @@ mp1_ioctl_getstatus:
         xorl %ecx, %ecx
         #edi base_alive
         movl base_alive, %edi
+		shll $8, %edi
 
     life_loop:
         #check 3time counter
@@ -607,7 +674,7 @@ mp1_ioctl_getstatus:
 
     life_done:
         #set livebit: shift lower 0,1,2 bit to 16,17,18
-        shll $16, %esi
+        shll $15, %esi
         #edi mpscore
         movl mp1_score, %edi
         #esi ready
