@@ -653,8 +653,8 @@ mp1_ioctl_getstatus:
         #3time counter increment
         addl $1, %ecx
         #update life status
+		addl $1, %esi
         shll $1, %esi
-        addl $1, %esi
         #shift base_alive 2bytes
         shll $8, %edi
         jmp life_loop
@@ -693,7 +693,7 @@ mp1_ioctl_getstatus:
 
         #check eax if success
         cmpl $0, %eax
-        je ret_neg1
+        jne ret_neg1
         #success
         movl $0, %eax
         #restore callee-saved
