@@ -322,7 +322,6 @@ update_missiles:
 
     simply_moving:
 
-####################################################
     erase_old:
 		#rowoffsets row*80*2bytes
         imul $80, %edi, %eax
@@ -364,8 +363,6 @@ update_missiles:
         call mp1_poke
         popl %edx
 
-
-#########################################################
     update_done:
         #callee-restore reg:
         popl %edi
@@ -380,12 +377,6 @@ update_missiles:
 		movl 12(%ebp), %ecx
 		movl 8(%ebp), %edx	
 		movl NEXT(%edx), %eax
-		
-		########################################
-		
-		
-		
-		########################################
 
         #check edx is head, head=*next, free
         cmpl mp1_missile_list, %edx
@@ -423,9 +414,14 @@ free_edx:
 		
 		movl %ecx, %edx
 		
+		cmpl mp1_missile_list, %eax
+		je head_free
+		
         jmp update_done
 
-
+head_free:
+		movl %eax, %edx
+		jmp update_done
 
 mp1_ioctl_startgame:
         #callee-saved reg
