@@ -85,8 +85,6 @@ mp1_rtc_tasklet:
         #movl $0, pre_cursor
 		movl $0, %ecx
 
-
-
     list_loop:
         #edx node cursor
         #check if cursor null
@@ -101,10 +99,6 @@ mp1_rtc_tasklet:
         call update_missiles
 		addl $8, %esp
 		
-		
-
-
-
         #save cursor as pre_cursor
         #movl %edx, pre_cursor
 		movl %edx, %ecx
@@ -112,57 +106,63 @@ mp1_rtc_tasklet:
         movl NEXT(%edx), %edx
         jmp list_loop
 
-
-link_done:
-
-
-#################################################################
-#start draw cities
-						#ebx as the city pic address carrier
-		movl $2,%esi	#set esi as city counter
-		movl $4,%edi	#set edi as the char counter
-		movl base_alive, %edx 	#put base status into edx
-		sall $8,%edx
-		##imull $160,$24,%eax		#initialize eax
-		##addl $36,%eax
-		movl $3956,%eax
-		############outer loop start
-outer_loop:	
-		cmpl $0,%esi
-		jl city_loop_done
-		cmpl $0,%edx
-		jge city_dead
-		movl $base_pic,%ebx
-		jmp city_alive
-city_dead:
-		movl $dead_base_pic,%ebx
-		############inner loop start
-city_alive:
+	#draw base
+	link_done:
+		#esi city counter
+		#edi width counter
+		#edx base life status
+		movl $2,%esi
 		movl $4,%edi
-inner_loop:
+		movl base_alive, %edx
+		sall $8,%edx
+		#160*24+58*2=3956  ##mid of base 20/40/60
+		#Y*80*2+X*2
+		movl $24, %eax
+		imull $160,%eax, %eax
+		addl $116, %eax
 
+	base_loop:	
+		#check if finish 3 bases
+		cmpl $0,%esi
+		jl redraw_xhair
+		#check if alive base
+		cmpl $0,%edx
+		jge base_d
+		movl $base_pic,%ebx
+		jmp base_life
+	base_d:
+		movl $dead_base_pic,%ebx
+	base_life:
+		movl $4,%edi
+		
+	pic_loop:
+		#check if finish draw all char
 		cmpl $0,%edi
-		jl char_loop_done
+		jl pic_loop_done
 		movl (%ebx),%ecx
+		
 		pushl %edx
 		call mp1_poke
-		popl %edx		
-		addl $2,%eax	####move right in the screen
-		addl $1,%ebx	####next char
-		addl $-1,%edi	####decrement the inner counter
-		jmp inner_loop
-		############inner loop stop
-char_loop_done:
-		addl $-48,%eax
-		sall $8,%edx
-		addl $-1,%esi
-		jmp outer_loop
-		############outer loop stop
-city_loop_done:
-#######################################################################
+		popl %edx	
+		#move screen cursor
+		addl $2,%eax
+		#move pic char pointer
+		addl $1,%ebx
+		#
+		subl $1,%edi
+		jmp pic_loop
 
-redraw_xhair:
-#rowoffsets row*80*2bytes
+	#finish one base pic
+	pic_loop_done:
+		#update cursors for next base
+		subl $48,%eax
+		sall $8,%edx
+		subl $1,%esi
+		#back to draw base loop
+		jmp base_loop
+
+	redraw_xhair:
+		#rowoffsets row*80*2bytes
         imul $80, crosshairs_y, %eax
         shll $1, %eax
         #coloffsets col*2bytes
@@ -176,10 +176,6 @@ redraw_xhair:
         pushl %edx
         call mp1_poke
         popl %edx
-
-
-
-
 
         #callee-restore reg:
         popl %edi
@@ -251,6 +247,7 @@ update_missiles:
         cmpl DEST_Y(%edx), %edi
         jne simply_moving
 
+	#exploding missiles
     explode_dest:
 
         #caller-saved  missile_explode
@@ -278,11 +275,9 @@ update_missiles:
         popl %edx
         popl %eax
 
-
+	#decrement explode
     dec_explode:
-        #decrement explode
         subl $1, EXPLODED(%edx)
-
         #erase old
         #rowoffsets row*80*2bytes
         imul $80, %edi, %eax
@@ -319,7 +314,7 @@ update_missiles:
 
         jmp update_done
 
-
+	#moving missiles
     simply_moving:
 
     erase_old:
@@ -362,7 +357,63 @@ update_missiles:
         pushl %edx
         call mp1_poke
         popl %edx
+		jmp update_done
 
+
+    #remove from list, free node/// pre_cursor=%ecx, this_cur=%edx, nxt_cur=(%edx)=%eax
+    mp1_missile_remove:
+		#load cursors into reg
+		movl 12(%ebp), %ecx
+		movl 8(%ebp), %edx	
+		movl NEXT(%edx), %eax
+
+        #check current is HEAD, if not, jump to middle
+        cmpl mp1_missile_list, %edx
+        jne middle
+	#HEAD node free
+        movl %eax, mp1_missile_list
+        jmp free_edx
+
+	#middle node free
+    middle:
+        #check if last
+        cmpl $0, %eax
+        je last
+        #make sure edx in middle, then (%eax)<-%ecx=(%edx)
+        movl %eax,NEXT(%ecx)
+        jmp free_edx
+		
+	#last node free
+    last:
+        #check edx is last
+        movl $0, NEXT(%ecx)
+
+	#free current cursor pointed list node		
+	free_edx:
+        pushl %eax
+        pushl %edx
+        pushl %ecx
+		pushl %edx
+        call mp1_free
+		addl $4, %esp
+        popl %ecx
+        popl %edx
+        popl %eax
+		
+		#assign prev_cur to edx(empty afterfree)
+		movl %ecx, %edx
+		#check if freed node HEAD
+		cmpl mp1_missile_list, %eax
+		je head_free
+		
+        jmp update_done
+		
+	#special care for HEAD free, put nxt_cur instead of prev_cur into edx
+	head_free:
+		movl %eax, %edx
+		jmp update_done
+
+	#callee-restore for missile_update, return to tasklet	
     update_done:
         #callee-restore reg:
         popl %edi
@@ -370,59 +421,8 @@ update_missiles:
         popl %ebx
         leave
 		ret
-
-
-    mp1_missile_remove:
-    #remove from list, free node/// pre_cursor=%ecx, this_cur=%edx, nxt_cur=(%edx)=%eax
-		movl 12(%ebp), %ecx
-		movl 8(%ebp), %edx	
-		movl NEXT(%edx), %eax
-
-        #check edx is head, head=*next, free
-        cmpl mp1_missile_list, %edx
-        jne middle
-	#head free
-        movl %eax, mp1_missile_list
 		
-        jmp free_edx
-
-    middle:
-        #check if last
-        cmpl $0, %eax
-        je last
-        #check edx in middle, (%eax)<-%ecx=(%edx)
-        movl %eax,NEXT(%ecx)
-        jmp free_edx
-
-    last:
-        #check edx is last
-        movl $0, NEXT(%ecx)
-
-free_edx:
-
-        pushl %eax
-        pushl %edx
-        pushl %ecx
 		
-		pushl %edx
-        call mp1_free
-		addl $4, %esp
-		
-        popl %ecx
-        popl %edx
-        popl %eax
-		
-		movl %ecx, %edx
-		
-		cmpl mp1_missile_list, %eax
-		je head_free
-		
-        jmp update_done
-
-head_free:
-		movl %eax, %edx
-		jmp update_done
-
 mp1_ioctl_startgame:
         #callee-saved reg
         pushl %ebp
@@ -503,16 +503,8 @@ mp1_ioctl_addmissile:
         leave
 		ret
 
-ret_neg1:
-        movl $-1, %eax
-        #retore callee-saved for caller
-        popl %edi
-        popl %esi
-        popl %ebx
-        leave
-        ret
-
-ret_neg1_free:
+	#return -1 and free pointer
+	ret_neg1_free:
 		popl %eax
         #call mp1_free, eax as *ptr
         pushl %eax
@@ -521,6 +513,16 @@ ret_neg1_free:
         #return -1
         movl $-1, %eax
         #restore callee-saved for caller
+        popl %edi
+        popl %esi
+        popl %ebx
+        leave
+        ret
+		
+#return -1
+ret_neg1:
+        movl $-1, %eax
+        #retore callee-saved for caller
         popl %edi
         popl %esi
         popl %ebx
@@ -552,7 +554,7 @@ mp1_ioctl_movexhairs:
         call mp1_poke
         popl %edx
 		
-        #readin arg 32bit int into ebx
+        #read in arg 32bit int into ebx
         movl 8(%ebp), %ebx
         #init esi all zero
         xorl %esi, %esi
@@ -563,7 +565,7 @@ mp1_ioctl_movexhairs:
         #high 16, yhair into ebx, sign ext
         sarl $16, %ebx
 
-        #check xbound
+    #check x bound
         addl crosshairs_x, %esi
         cmpl $79, %esi
         jg x_hbound
@@ -571,6 +573,7 @@ mp1_ioctl_movexhairs:
         jl x_lbound
         movl %esi, crosshairs_x
         jmp ck_ybound
+
     x_hbound:
         #>79 $79 into xcord
         movl $79, crosshairs_x
@@ -579,8 +582,8 @@ mp1_ioctl_movexhairs:
         #0<  $0 into xcord
         movl $0, crosshairs_x
 
+	#check y bound
     ck_ybound:
-        #check ybound
         addl crosshairs_y, %ebx
         cmpl $24, %ebx
         jg y_hbound
@@ -596,6 +599,7 @@ mp1_ioctl_movexhairs:
         #<0 $0 into ycord
         movl $0, crosshairs_y
 
+	#draw crosshair on screen
     d_crosshair:
         #rowoffsets row*80*2bytes
         imul $80, crosshairs_y, %eax
@@ -640,6 +644,7 @@ mp1_ioctl_getstatus:
         movl base_alive, %edi
 		shll $8, %edi
 
+	#check life status, loop 3 times
     life_loop:
         #check 3time counter
         cmpl $3, %ecx
@@ -652,19 +657,19 @@ mp1_ioctl_getstatus:
     base_live:
         #3time counter increment
         addl $1, %ecx
-        #update life status
+        #update alive to status reg
 		addl $1, %esi
         shll $1, %esi
-        #shift base_alive 2bytes
+        #check next life status by left shift base_alive 2bytes
         shll $8, %edi
         jmp life_loop
 
     base_dead:
         #3time counter increment
         addl $1, %ecx
-        #update life status
+        #update dead to status reg
         shll $1, %esi
-        #shift base_alive 2bytes
+        #check next life status by left shift base_alive 2bytes
         shll $8, %edi
         jmp life_loop
 
@@ -704,6 +709,41 @@ mp1_ioctl_getstatus:
 		ret
 
 mp1_ioctl_endgame:
-
-
+		#callee-saved reg
+        pushl %ebp
+        movl %esp, %ebp
+        pushl %ebx
+        pushl %esi
+        pushl %edi
+		
+	loop_free:
+		#Check if all node free, while HEAD != 0x0
+		cmpl $0, mp1_missile_list
+		#out loop when HEAD == 0x0
+		je all_free
+		#esi = HEAD
+		movl mp1_missile_list, %esi
+		#HEAD's *next
+		movl NEXT(%esi), %edi
+		#HEAD = *next node
+		movl %edi, mp1_missile_list
+		#free old_HEAD
+		pushl %eax
+        pushl %edx
+        pushl %ecx
+		pushl %esi
+        call mp1_free
+		addl $4, %esp
+        popl %ecx
+        popl %edx
+        popl %eax
+		jmp loop_free
+		
+	
+	all_free:
+        #restore callee-saved
+        popl %edi
+        popl %esi
+        popl %ebx
+        leave
 		ret
