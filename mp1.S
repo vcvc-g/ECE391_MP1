@@ -82,7 +82,6 @@ mp1_rtc_tasklet:
         #edx init with HEAD
         movl mp1_missile_list, %edx
         #pre_cursor init with 0
-        #movl $0, pre_cursor
 		movl $0, %ecx
 
     list_loop:
@@ -92,21 +91,21 @@ mp1_rtc_tasklet:
         je link_done
 
         #call update_missiles according edx
-
+		#no caller-save since *ptr need updated
 
 		pushl %ecx
 		pushl %edx
         call update_missiles
 		addl $8, %esp
 		
-        #save cursor as pre_cursor
-        #movl %edx, pre_cursor
+        #update previous_cursor: save current cursor as pre_cursor
 		movl %edx, %ecx
-        #assign *next to cursor
+        #update current_cursor: assign *next to current cursor
         movl NEXT(%edx), %edx
         jmp list_loop
 
-	#draw base
+		
+	#draw bases
 	link_done:
 		#esi city counter
 		#edi width counter
@@ -116,7 +115,7 @@ mp1_rtc_tasklet:
 		movl base_alive, %edx
 		sall $8,%edx
 		#160*24+58*2=3956  ##mid of base 20/40/60
-		#Y*80*2+X*2
+		#video memory offset: Y*80*2+X*2
 		movl $24, %eax
 		imull $160,%eax, %eax
 		addl $116, %eax
@@ -155,12 +154,14 @@ mp1_rtc_tasklet:
 	#finish one base pic
 	pic_loop_done:
 		#update cursors for next base
+		#48 is base position offset
 		subl $48,%eax
 		sall $8,%edx
 		subl $1,%esi
 		#back to draw base loop
 		jmp base_loop
 
+	#draw crosshairs 
 	redraw_xhair:
 		#rowoffsets row*80*2bytes
         imul $80, crosshairs_y, %eax
@@ -210,6 +211,17 @@ jumptable:
         .long mp1_ioctl_startgame, mp1_ioctl_addmissile, mp1_ioctl_movexhairs, mp1_ioctl_getstatus, mp1_ioctl_endgame
 
 # ----------------- Functions private to this file -------------------
+# void update_missiles(*node_ptr current_node, *node_ptr prev_node);
+# Examine the current missile node status and perform tasks accordingly
+# (1) Erase screen image and free disappear nodes: missiles flying out of screen or finish explosion
+# (2) Erase old position image and draw new position image: missiles simply flying
+# (3) Examine explosion effect and draw explosion image: missiles start explode or currently exploding 
+#    Inputs: %ecx  - The previous linked-list node cursor
+#            %edx - The current linked-list node cursor
+#                   to write to
+#   Outputs: %edx - The updated current node pointer
+# Registers: Clobbers EAX EDX ECX
+
 update_missiles:
         #callee-saved reg
         pushl %ebp
@@ -261,9 +273,9 @@ update_missiles:
         popl %ecx
         popl %edx
 
-        #check eax of missile_explode
+        #check output of missile_explode
         cmpl $0, %eax
-        #check 0, skip notify_user
+        #check 0, may skip notify_user if no side effect
         je dec_explode
 
         #call notify_user
@@ -275,10 +287,11 @@ update_missiles:
         popl %edx
         popl %eax
 
-	#decrement explode
+	#decrement EXPLODED value
     dec_explode:
+	
         subl $1, EXPLODED(%edx)
-        #erase old
+        #erase old position image 
         #rowoffsets row*80*2bytes
         imul $80, %edi, %eax
         shll $1, %eax
@@ -293,11 +306,11 @@ update_missiles:
         call mp1_poke
         popl %edx
 		
-        #check explode==0
+        #check if finish EXPLODED, remove if finish explosion
         cmpl $0, EXPLODED(%edx)
         jle mp1_missile_remove
 
-        #draw explod char
+        #draw explode image
         #rowoffsets row*80*2bytes
         imul $80, %edi, %eax
         shll $1, %eax
@@ -314,9 +327,10 @@ update_missiles:
 
         jmp update_done
 
-	#moving missiles
+	#moving missiles--non exploded, on screen 
     simply_moving:
 
+	#erase old position image: draw space on old X, Y
     erase_old:
 		#rowoffsets row*80*2bytes
         imul $80, %edi, %eax
@@ -360,7 +374,8 @@ update_missiles:
 		jmp update_done
 
 
-    #remove from list, free node/// pre_cursor=%ecx, this_cur=%edx, nxt_cur=(%edx)=%eax
+    #remove from list, free node
+	#previous_cursor:%ecx, current_cursor:%edx, next_cursor:%eax = (%edx)
     mp1_missile_remove:
 		#load cursors into reg
 		movl 12(%ebp), %ecx
@@ -422,7 +437,8 @@ update_missiles:
         leave
 		ret
 		
-		
+# void mp1_ioctl_startgame(unsigned long ignore);
+# You can use this function to initialize the game	
 mp1_ioctl_startgame:
         #callee-saved reg
         pushl %ebp
@@ -444,7 +460,12 @@ mp1_ioctl_startgame:
         leave
 		ret
 
-
+# void mp1_ioctl_addmissile(struct missile* user_missile);
+# You can use this function to add new missile to missile linked-list
+#   Inputs : *ptr to a struct missile in user space
+#	outputs: int 0
+#   Outputs: none
+# Registers: Standard calling convention
 mp1_ioctl_addmissile:
         #callee-saved reg
         pushl %ebp
@@ -467,7 +488,7 @@ mp1_ioctl_addmissile:
 
         #check return ptr eax if malloc succeed
         cmpl $0, %eax
-        #failed return -1
+        #malloc failed return -1
         je ret_neg1
 
         #call copy_from_user to malloced space
@@ -519,7 +540,7 @@ mp1_ioctl_addmissile:
         leave
         ret
 		
-#return -1
+#return -1 and callee-restore
 ret_neg1:
         movl $-1, %eax
         #retore callee-saved for caller
@@ -529,7 +550,11 @@ ret_neg1:
         leave
         ret
 
-
+# int mp1_ioctl_movexhairs(unsigned long xhair_delta_packed)
+# This function moves the crosshair according to input packed long
+# Inputs   : unsigned long - 32 bit, Xchange :Low 16 bits Ychange:High 16 bits
+# Outputs  : int 0
+# Registers: Standard calling convention
 mp1_ioctl_movexhairs:
         #callee-saved reg
         pushl %ebp
@@ -538,7 +563,7 @@ mp1_ioctl_movexhairs:
         pushl %esi
         pushl %edi
 		
-
+		#erase old xhair: draw space on old X Y
 		#rowoffsets row*80*2bytes
         imul $80, crosshairs_y, %eax
         shll $1, %eax
@@ -565,7 +590,7 @@ mp1_ioctl_movexhairs:
         #high 16, yhair into ebx, sign ext
         sarl $16, %ebx
 
-    #check x bound
+    #check X bound
         addl crosshairs_x, %esi
         cmpl $79, %esi
         jg x_hbound
@@ -575,14 +600,14 @@ mp1_ioctl_movexhairs:
         jmp ck_ybound
 
     x_hbound:
-        #>79 $79 into xcord
+        #x>79 $79 into xcord
         movl $79, crosshairs_x
         jmp ck_ybound
     x_lbound:
-        #0<  $0 into xcord
+        #x<0  $0 into xcord
         movl $0, crosshairs_x
 
-	#check y bound
+	#check Y bound
     ck_ybound:
         addl crosshairs_y, %ebx
         cmpl $24, %ebx
@@ -599,7 +624,7 @@ mp1_ioctl_movexhairs:
         #<0 $0 into ycord
         movl $0, crosshairs_y
 
-	#draw crosshair on screen
+	#draw crosshair on new updated X Y
     d_crosshair:
         #rowoffsets row*80*2bytes
         imul $80, crosshairs_y, %eax
@@ -625,7 +650,11 @@ mp1_ioctl_movexhairs:
         leave
 		ret
 
-
+# int mp1_ioctl_getstatus(unsigned long* user_status)
+# The function copy current score and status of bases from kernel to user space
+# Inputs   : unsigned long* user_status
+# Outputs  : Returns an integer - 0 if succeed, -1 if failed
+# Registers: Standard calling convention
 mp1_ioctl_getstatus:
         #callee-saved reg
         pushl %ebp
@@ -708,6 +737,11 @@ mp1_ioctl_getstatus:
         leave
 		ret
 
+# int mp1_ioctl_endgame(unsigned long ignore)
+# The function end the game and clean all space used
+# Inputs   : 
+# Outputs  : 
+# Registers: Standard calling convention
 mp1_ioctl_endgame:
 		#callee-saved reg
         pushl %ebp
@@ -716,16 +750,17 @@ mp1_ioctl_endgame:
         pushl %esi
         pushl %edi
 		
+	#walk through the linked-list and free one by one
 	loop_free:
 		#Check if all node free, while HEAD != 0x0
 		cmpl $0, mp1_missile_list
 		#out loop when HEAD == 0x0
 		je all_free
-		#esi = HEAD
+		#assign cursor to HEAD, esi = HEAD
 		movl mp1_missile_list, %esi
-		#HEAD's *next
+		#load next HEAD, HEAD's *next
 		movl NEXT(%esi), %edi
-		#HEAD = *next node
+		#assign new HEAD, HEAD = *next node
 		movl %edi, mp1_missile_list
 		#free old_HEAD
 		pushl %eax
@@ -739,7 +774,7 @@ mp1_ioctl_endgame:
         popl %eax
 		jmp loop_free
 		
-	
+	#all nodes freed, return
 	all_free:
         #restore callee-saved
         popl %edi
